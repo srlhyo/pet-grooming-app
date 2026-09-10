@@ -83,20 +83,43 @@ The central entity.
 
 ## notifications_log
 
-One row per email the system tried to send.
+One row per notification the system decided to send about an appointment. Email only for the MVP (reminders and missed-appointment notices). The table is a log, not a queue: rows are created when a notification is due to exist and updated as it is sent or fails.
 
 - `id` (PK)
-- `shop_id` (FK → shops) **[tenant]**
-- `appointment_id` (FK → appointments)
-- `client_id` (FK → clients)
+- `shop_id` (FK → shops) **[tenant]** — stored directly even though it is reachable via the appointment, so per-shop history and future tenant isolation do not need joins.
+- `appointment_id` (FK → appointments) — the appointment the message is about. Required for both MVP types.
+- `client_id` (FK → clients) — who the message was for. Kept alongside `appointment_id` so "all messages sent to this client" is a direct lookup.
 - `type` — `appointment_reminder` | `missed_appointment`
-- `recipient_email` — snapshot of the address used
+- `recipient_email` — snapshot of the address the message was sent to. Clients can change their email later; the log must keep what was actually used.
 - `status` — `pending` | `sent` | `failed`
-- `scheduled_for` — when it should be sent
-- `sent_at`
-- `provider_message_id`
-- `error_message`
+  - `pending`: created, not yet sent
+  - `sent`: the email provider accepted it
+  - `failed`: sending did not succeed; `error_message` says why
+- `scheduled_for` — `timestamptz`, when the message should go out. Reminder: some time before `appointments.starts_at`. Missed-appointment: when the appointment is marked `no_show`.
+- `sent_at` — `timestamptz`, nullable; set when `status` becomes `sent`.
+- `provider_message_id` — nullable; identifier returned by the email provider, so a message can be traced in the provider's dashboard.
+- `error_message` — nullable; last failure reason. Even a rough MVP should never fail silently.
 - `created_at`, `updated_at`
+
+Choices made for simplicity:
+
+- `type` and `status` are small fixed value sets (enum or checked text, decided with the ORM). Adding values later is easy.
+- `recipient_email` rather than a generic `recipient` + `channel` pair, because only email exists today. If SMS/WhatsApp is added, a `channel` column can be introduced then.
+- No retry counters, provider name, or template fields yet. `error_message` and `status` give enough to see that something went wrong; retry policy is a later design.
+
+Relationships:
+
+- `notifications_log.shop_id → shops.id`: every log row belongs to one shop.
+- `notifications_log.appointment_id → appointments.id`: one appointment can have several log rows (one reminder, one missed-appointment notice, plus any re-sends after a reschedule).
+- `notifications_log.client_id → clients.id`: one client can have many log rows. Should always match the appointment's client.
+
+Left undecided for this table:
+
+- Whether a rescheduled appointment reuses the pending row or cancels it and creates a new one (a `cancelled` status may be added for that).
+- Whether opted-out clients get a `skipped` row for visibility or no row at all.
+- How far ahead reminders are scheduled, and whether more than one reminder is sent.
+- Retry behaviour and any uniqueness rule preventing duplicate sends.
+- Whether `appointment_id` stays required once non-appointment emails exist.
 
 ---
 
